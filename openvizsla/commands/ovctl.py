@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python.
 
 # This needs python3.3 or greater - argparse changes behavior
 # TODO - workaround
 
 from .. import libov, find_openvizsla_asset
-from ..libov import OVDevice
+
+from ..device import OVDevice
+from ..firmware import OVFirmwarePackage
 
 import argparse
 import time
@@ -66,7 +68,7 @@ int16 = lambda x: int(x, 16)
 
 
 def check_ulpi_clk(dev):
-    clks_up = dev.regs.ucfg_stat.rd()
+    clks_up = dev.regs.ucfg_stat
 
     if not clks_up:
         print("ULPI Clock has not started up - osc?")
@@ -101,12 +103,12 @@ def report(dev):
     else:
         # display the ULPI identifier
         ident = 0
-        for x in [dev.ulpiregs.vidh,
-                dev.ulpiregs.vidl,
-                dev.ulpiregs.pidh,
-                dev.ulpiregs.pidl]:
+        for x in [dev.ulpi_regs.vidh,
+                dev.ulpi_regs.vidl,
+                dev.ulpi_regs.pidh,
+                dev.ulpi_regs.pidl]:
             ident <<= 8
-            ident |= x.rd()
+            ident |= x
 
         name = 'unknown'
         if ident == libov.SMSC_334x_MAGIC:
@@ -115,15 +117,15 @@ def report(dev):
 
         # do in depth phy tests
         if ident == libov.SMSC_334x_MAGIC:
-            dev.ulpiregs.scratch.wr(0)
-            dev.ulpiregs.scratch_set.wr(0xCF)
-            dev.ulpiregs.scratch_clr.wr(0x3C)
+            dev.ulpi_regs.scratch = 0
+            dev.ulpi_regs.scratch_set = 0xCF
+            dev.ulpi_regs.scratch_clr = 0x3C
 
-            stat = "OK" if dev.ulpiregs.scratch.rd() == 0xC3 else "FAIL"
+            stat = "OK" if dev.ulpi_regs.scratch == 0xC3 else "FAIL"
 
             print("\tULPI Scratch register IO test: %s" % stat)
-            print("\tPHY Function Control Reg:  %02x" % dev.ulpiregs.func_ctl.rd())
-            print("\tPHY Interface Control Reg: %02x" % dev.ulpiregs.intf_ctl.rd())
+            print("\tPHY Function Control Reg:  %02x" % dev.ulpi_regs.func_ctl)
+            print("\tPHY Interface Control Reg: %02x" % dev.ulpi_regs.intf_ctl)
         else:
             print("\tUnknown PHY - skipping phy tests")
 
@@ -219,11 +221,11 @@ class OutputPcap:
 def do_sdramtests(dev, cb=None, tests = range(0, 6)):
 
     for i in tests:
-        dev.regs.SDRAM_TEST_CMD.wr(0x80 | i)
+        dev.regs.SDRAM_TEST_CMD = 0x80 | i
         stat = 0x40
         while (stat & 0x40):
             time.sleep(0.1)
-            stat = dev.regs.SDRAM_TEST_CMD.rd() 
+            stat = dev.regs.SDRAM_TEST_CMD 
 
         ok = stat & 0x20
         if cb is not None:
@@ -237,7 +239,7 @@ def do_sdramtests(dev, cb=None, tests = range(0, 6)):
 @command('sdramtest')
 def sdramtest(dev):
     # LEDS select
-    dev.regs.LEDS_MUX_0.wr(1)
+    dev.regs.LEDS_MUX_0 = 1
 
     stat = do_sdramtests(dev, tests = [3])
     if stat != -1:
@@ -245,34 +247,34 @@ def sdramtest(dev):
     else:
         print("SDRAM test passed")
 
-    dev.regs.LEDS_MUX_0.wr(0)
+    dev.regs.LEDS_MUX_0 = 0
 
 @command('sniff', ('speed', str), ('format', str, 'verbose'), ('out', str, None), ('timeout', int, None))
 def sniff(dev, speed, format, out, timeout):
     # LEDs off
-    dev.regs.LEDS_MUX_2.wr(0)
-    dev.regs.LEDS_OUT.wr(0)
+    dev.regs.LEDS_MUX_2 = 0
+    dev.regs.LEDS_OUT = 0
 
     # LEDS 0/1 to FTDI TX/RX
-    dev.regs.LEDS_MUX_0.wr(2)
-    dev.regs.LEDS_MUX_1.wr(2)
+    dev.regs.LEDS_MUX_0 = 2
+    dev.regs.LEDS_MUX_1 = 2
 
     # enable SDRAM buffering
     ring_base = 0
     ring_size = 16 * 1024 * 1024
     ring_end = ring_base + ring_size
-    dev.regs.SDRAM_SINK_GO.wr(0)
-    dev.regs.SDRAM_HOST_READ_GO.wr(0)
-    dev.regs.SDRAM_SINK_RING_BASE.wr(ring_base)
-    dev.regs.SDRAM_SINK_RING_END.wr(ring_end)
-    dev.regs.SDRAM_HOST_READ_RING_BASE.wr(ring_base)
-    dev.regs.SDRAM_HOST_READ_RING_END.wr(ring_end)
-    dev.regs.SDRAM_SINK_GO.wr(1)
-    dev.regs.SDRAM_HOST_READ_GO.wr(1)
+    dev.regs.SDRAM_SINK_GO = 0
+    dev.regs.SDRAM_HOST_READ_GO = 0
+    dev.regs.SDRAM_SINK_RING_BASE = ring_base
+    dev.regs.SDRAM_SINK_RING_END = ring_end
+    dev.regs.SDRAM_HOST_READ_RING_BASE = ring_base
+    dev.regs.SDRAM_HOST_READ_RING_END = ring_end
+    dev.regs.SDRAM_SINK_GO = 1
+    dev.regs.SDRAM_HOST_READ_GO = 1
 
     # clear perfcounters
-    dev.regs.OVF_INSERT_CTL.wr(1)
-    dev.regs.OVF_INSERT_CTL.wr(0)
+    dev.regs.OVF_INSERT_CTL = 1
+    dev.regs.OVF_INSERT_CTL = 0
 
     assert speed in ["hs", "fs", "ls"]
 
@@ -281,14 +283,14 @@ def sniff(dev, speed, format, out, timeout):
 
     # set to non-drive; set FS or HS as requested
     if speed == "hs":
-            dev.ulpiregs.func_ctl.wr(0x48)
-            dev.rxcsniff.service.highspeed = True
+            dev.ulpi_regs.func_ctl = 0x48
+            dev.sniffer.highspeed = True
     elif speed == "fs":
-            dev.ulpiregs.func_ctl.wr(0x49)
-            dev.rxcsniff.service.highspeed = False
+            dev.ulpi_regs.func_ctl = 0x49
+            dev.sniffer.highspeed = False
     elif speed == "ls":
-            dev.ulpiregs.func_ctl.wr(0x4a)
-            dev.rxcsniff.service.highspeed = False
+            dev.ulpi_regs.func_ctl = 0x4a
+            dev.sniffer.highspeed = False
     else:
         assert 0,"Invalid Speed"
 
@@ -310,14 +312,14 @@ def sniff(dev, speed, format, out, timeout):
 
     elapsed_time = 0
     try:
-        dev.regs.CSTREAM_CFG.wr(1)
+        dev.regs.CSTREAM_CFG = 1
         while 1:
-            dev.regs.SDRAM_SINK_PTR_READ.wr(0)
-            dev.regs.OVF_INSERT_CTL.wr(0)
+            dev.regs.SDRAM_SINK_PTR_READ = 0
+            dev.regs.OVF_INSERT_CTL = 0
 
-            rptr = dev.regs.SDRAM_SINK_RPTR.rd()
-            wptr = dev.regs.SDRAM_SINK_WPTR.rd()
-            wrap_count = dev.regs.SDRAM_SINK_WRAP_COUNT.rd()
+            rptr = dev.regs.SDRAM_SINK_RPTR
+            wptr = dev.regs.SDRAM_SINK_WPTR
+            wrap_count = dev.regs.SDRAM_SINK_WRAP_COUNT
 
             rptr -= ring_base
             wptr -= ring_base
@@ -334,33 +336,33 @@ def sniff(dev, speed, format, out, timeout):
 
             print("%d / %d (%3.2f %% utilization) %d kB | %d overflow, %08x total | R%08x W%08x" %
                 (delta, ring_size, utilization, total / 1024,
-                dev.regs.OVF_INSERT_NUM_OVF.rd(), dev.regs.OVF_INSERT_NUM_TOTAL.rd(),
+                dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL,
                 rptr, wptr
                 ), file = sys.stderr)
 
-            dev.regs.OVF_INSERT_CTL.wr(0)
-            print("%d overflow, %08x total" % (dev.regs.OVF_INSERT_NUM_OVF.rd(), dev.regs.OVF_INSERT_NUM_TOTAL.rd()), file = sys.stderr)
+            dev.regs.OVF_INSERT_CTL = 0
+            print("%d overflow, %08x total" % (dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL), file = sys.stderr)
 
             if False:
-                dev.regs.SDRAM_SINK_DEBUG_CTL.wr(0)
+                dev.regs.SDRAM_SINK_DEBUG_CTL = 0
                 print("rptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x | wptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x wrap=%x" % (
-                    dev.regs.SDRAM_HOST_READ_RPTR_STATUS.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_I_STB.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_I_ACK.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_D_STB.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_D_TERM.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S0.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S1.rd(),
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S2.rd(),
-                    dev.regs.SDRAM_SINK_WPTR.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_I_STB.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_I_ACK.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_D_STB.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_D_TERM.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_S0.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_S1.rd(),
-                    dev.regs.SDRAM_SINK_DEBUG_S2.rd(),
-                    dev.regs.SDRAM_SINK_WRAP_COUNT.rd(),
+                    dev.regs.SDRAM_HOST_READ_RPTR_STATUS,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_I_STB,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_I_ACK,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_D_STB,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_D_TERM,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_S0,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_S1,
+                    dev.regs.SDRAM_HOST_READ_DEBUG_S2,
+                    dev.regs.SDRAM_SINK_WPTR,
+                    dev.regs.SDRAM_SINK_DEBUG_I_STB,
+                    dev.regs.SDRAM_SINK_DEBUG_I_ACK,
+                    dev.regs.SDRAM_SINK_DEBUG_D_STB,
+                    dev.regs.SDRAM_SINK_DEBUG_D_TERM,
+                    dev.regs.SDRAM_SINK_DEBUG_S0,
+                    dev.regs.SDRAM_SINK_DEBUG_S1,
+                    dev.regs.SDRAM_SINK_DEBUG_S2,
+                    dev.regs.SDRAM_SINK_WRAP_COUNT,
                     ), file = sys.stderr)
             if timeout and elapsed_time > timeout:
                 break
@@ -369,25 +371,25 @@ def sniff(dev, speed, format, out, timeout):
     except KeyboardInterrupt:
         pass
     finally:
-        dev.regs.SDRAM_SINK_GO.wr(0)
-        dev.regs.SDRAM_HOST_READ_GO.wr(0)
-        dev.regs.CSTREAM_CFG.wr(0)
+        dev.regs.SDRAM_SINK_GO = 0
+        dev.regs.SDRAM_HOST_READ_GO = 0
+        dev.regs.CSTREAM_CFG = 0
 
     if out is not None:
         out.close()
 
 @command('debug-stream')
 def debug_stream(dev):
-    cons = dev.regs.CSTREAM_CONS_LO.rd() | dev.regs.CSTREAM_CONS_HI.rd() << 8
-    prod_hd = dev.regs.CSTREAM_PROD_HD_LO.rd() | dev.regs.CSTREAM_PROD_HD_HI.rd() << 8
-    prod = dev.regs.CSTREAM_PROD_LO.rd() | dev.regs.CSTREAM_PROD_HI.rd() << 8
-    size = dev.regs.CSTREAM_SIZE_LO.rd() | dev.regs.CSTREAM_SIZE_HI.rd() << 8
+    cons = dev.regs.CSTREAM_CONS_LO | dev.regs.CSTREAM_CONS_HI << 8
+    prod_hd = dev.regs.CSTREAM_PROD_HD_LO | dev.regs.CSTREAM_PROD_HD_HI << 8
+    prod = dev.regs.CSTREAM_PROD_LO | dev.regs.CSTREAM_PROD_HI << 8
+    size = dev.regs.CSTREAM_SIZE_LO | dev.regs.CSTREAM_SIZE_HI << 8
 
-    state = dev.regs.CSTREAM_PROD_STATE.rd()
+    state = dev.regs.CSTREAM_PROD_STATE
 
-    laststart = dev.regs.CSTREAM_LAST_START_LO.rd() | dev.regs.CSTREAM_LAST_START_HI.rd() << 8
-    lastcount = dev.regs.CSTREAM_LAST_COUNT_LO.rd() | dev.regs.CSTREAM_LAST_COUNT_HI.rd() << 8
-    lastpw = dev.regs.CSTREAM_LAST_PW_LO.rd() | dev.regs.CSTREAM_LAST_PW_HI.rd() << 8
+    laststart = dev.regs.CSTREAM_LAST_START_LO | dev.regs.CSTREAM_LAST_START_HI << 8
+    lastcount = dev.regs.CSTREAM_LAST_COUNT_LO | dev.regs.CSTREAM_LAST_COUNT_HI << 8
+    lastpw = dev.regs.CSTREAM_LAST_PW_LO | dev.regs.CSTREAM_LAST_PW_HI << 8
 
     print("cons: %04x prod-wr: %04x prod-hd: %04x size: %04x state: %02x" % (cons, prod, prod_hd, size, state))
     print("\tlaststart: %04x lastcount: %04x (end: %04x) pw-at-write: %04x" % (laststart, lastcount, laststart + lastcount, lastpw))
@@ -402,15 +404,15 @@ def iowrite(dev, addr, value):
 
 @command('led-test', ('v', int16))
 def ledtest(dev, v):
-    dev.regs.leds_out.wr(v)
+    dev.regs.leds_out = v
 
 @command('eep-erase')
 def eeperase(dev):
-    dev.dev.eeprom_erase()
+    dev.ftdi.eeprom_erase()
 
 @command('eep-program', ('serialno', int))
 def eepprogram(dev, serialno):
-    dev.dev.eeprom_program(serialno)
+    dev.ftdi.eeprom_program(serialno)
 
 @command('sdram_host_read_test')
 def sdram_host_read_test(dev):
@@ -418,47 +420,47 @@ def sdram_host_read_test(dev):
     ring_base = 0x10000
     ring_end = ring_base + 1024*1024
 
-    dev.regs.SDRAM_SINK_RING_BASE.wr(ring_base)
-    dev.regs.SDRAM_SINK_RING_END.wr(ring_end)
+    dev.regs.SDRAM_SINK_RING_BASE = ring_base
+    dev.regs.SDRAM_SINK_RING_END = ring_end
 
-    dev.regs.SDRAM_HOST_READ_RING_BASE.wr(ring_base)
-    dev.regs.SDRAM_HOST_READ_RING_END.wr(ring_end)
+    dev.regs.SDRAM_HOST_READ_RING_BASE = ring_base
+    dev.regs.SDRAM_HOST_READ_RING_END = ring_end
 
     cnt = 0
     while True:
-        rptr = dev.regs.SDRAM_HOST_READ_RPTR_STATUS.rd()
+        rptr = dev.regs.SDRAM_HOST_READ_RPTR_STATUS
         cnt += 1
         if cnt == 5:
             print("GO SINK")
-            dev.regs.SDRAM_SINK_GO.wr(1)
+            dev.regs.SDRAM_SINK_GO = 1
         if cnt == 10:
             print("GO SOURCE")
-            dev.regs.SDRAM_HOST_READ_GO.wr(1)
+            dev.regs.SDRAM_HOST_READ_GO = 1
 
         print("rptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x | wptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x wrap=%x" % (
             rptr,
-            dev.regs.SDRAM_HOST_READ_DEBUG_I_STB.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_I_ACK.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_D_STB.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_D_TERM.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_S0.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_S1.rd(),
-            dev.regs.SDRAM_HOST_READ_DEBUG_S2.rd(),
-            dev.regs.SDRAM_SINK_WPTR.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_I_STB.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_I_ACK.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_D_STB.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_D_TERM.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_S0.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_S1.rd(),
-            dev.regs.SDRAM_SINK_DEBUG_S2.rd(),
-            dev.regs.SDRAM_SINK_WRAP_COUNT.rd(),
+            dev.regs.SDRAM_HOST_READ_DEBUG_I_STB,
+            dev.regs.SDRAM_HOST_READ_DEBUG_I_ACK,
+            dev.regs.SDRAM_HOST_READ_DEBUG_D_STB,
+            dev.regs.SDRAM_HOST_READ_DEBUG_D_TERM,
+            dev.regs.SDRAM_HOST_READ_DEBUG_S0,
+            dev.regs.SDRAM_HOST_READ_DEBUG_S1,
+            dev.regs.SDRAM_HOST_READ_DEBUG_S2,
+            dev.regs.SDRAM_SINK_WPTR,
+            dev.regs.SDRAM_SINK_DEBUG_I_STB,
+            dev.regs.SDRAM_SINK_DEBUG_I_ACK,
+            dev.regs.SDRAM_SINK_DEBUG_D_STB,
+            dev.regs.SDRAM_SINK_DEBUG_D_TERM,
+            dev.regs.SDRAM_SINK_DEBUG_S0,
+            dev.regs.SDRAM_SINK_DEBUG_S1,
+            dev.regs.SDRAM_SINK_DEBUG_S2,
+            dev.regs.SDRAM_SINK_WRAP_COUNT,
             ), file = sys.stderr)
 
         if cnt == 20:
             print("STOP")
-            dev.regs.SDRAM_HOST_READ_GO.wr(0)
-#            print("STOP: %d" % dev.regs.SDRAM_HOST_READ_GO.rd())
+            dev.regs.SDRAM_HOST_READ_GO = 0
+#            print("STOP: %d" % dev.regs.SDRAM_HOST_READ_GO)
 
 
 class LB_Test(Command):
@@ -472,25 +474,25 @@ class LB_Test(Command):
     def go(dev, args):
         # Stop the generator - do twice to make sure
         # theres no hanging packet 
-        dev.regs.RANDTEST_CFG.wr(0)
-        dev.regs.RANDTEST_CFG.wr(0)
+        dev.regs.RANDTEST_CFG = 0
+        dev.regs.RANDTEST_CFG = 0
 
         # LEDs off
-        dev.regs.LEDS_MUX_2.wr(0)
-        dev.regs.LEDS_OUT.wr(0)
+        dev.regs.LEDS_MUX_2 = 0
+        dev.regs.LEDS_OUT = 0
 
         # LEDS 0/1 to FTDI TX/RX
-        dev.regs.LEDS_MUX_0.wr(2)
-        dev.regs.LEDS_MUX_1.wr(2)
+        dev.regs.LEDS_MUX_0 = 2
+        dev.regs.LEDS_MUX_1 = 2
 
         # Set test packet size
-        dev.regs.RANDTEST_SIZE.wr(args.size)
+        dev.regs.RANDTEST_SIZE = args.size
 
         # Reset the statistics counters
         dev.lfsrtest.reset()
 
         # Start the test (and reinit the generator)
-        dev.regs.RANDTEST_CFG.wr(1)
+        dev.regs.RANDTEST_CFG = 1
 
         st = time.time()
         try:
@@ -502,7 +504,7 @@ class LB_Test(Command):
                     b.total, b.total/float(time.time() - st)/1024/1024))
 
         except KeyboardInterrupt:
-            dev.regs.randtest_cfg.wr(0)
+            dev.regs.randtest_cfg = 0
 
 
 def min_version_check(major, minor):
@@ -514,8 +516,7 @@ def min_version_check(major, minor):
 def main():
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pkg", "-p", type=lambda x: zipfile.ZipFile(x, 'r'), 
-            default=default_package)
+    ap.add_argument("--pkg", "-p", type=OVFirmwarePackage, default=default_package)
     ap.add_argument("-l", "--load", action="store_true")
     ap.add_argument("--verbose", "-v", action="store_true")
     ap.add_argument("--config-only", "-C", action="store_true")
@@ -529,34 +530,33 @@ def main():
 
     args = ap.parse_args()
 
+    dev = OVDevice(firmware_package=args.pkg, verbose=args.verbose)
 
-    dev = OVDevice(mapfile=args.pkg.open('map.txt', 'r'), verbose=args.verbose)
-
-    err = dev.open(bitstream=args.pkg.open('ov3.bit', 'r') if args.load else None)
-
-    if err:
-        if err == -4:
+    try:
+         dev.open(reconfigure_fpga=args.load)
+    except IOError as e:
+        if e.errno == -4:
             print("USB: Unable to find device")
             return 1
         print("USB: Error opening device (1)\n")
-        print(err)
 
-    if not dev.isLoaded():
+    print("device open")
+
+    if not dev.fpga_configured(use_cached=True):
         print("FPGA not loaded, forcing reload")
         dev.close()
 
-        err = dev.open(bitstream=args.pkg.open('ov3.bit','r'))
-
-    if err:
-        print("USB: Error opening device (2)\n")
-        return 1
-
+        try:
+            dev.open(reconfigure_fpga=True)
+        except IOError:
+            print("USB: Error opening device (2)\n")
+            return 1
 
     if args.config_only:
         return
 
     if not (hasattr(args, 'hdlr') and args.hdlr.name.startswith("eep-")):
-        ret = dev.dev.eeprom_sanitycheck()
+        ret = dev.ftdi.eeprom_sanitycheck()
         if ret > 0:
             print("\nPlease run this tool with the subcommand 'eep-program <serial number>'")
             print("to program your EEPROM. The FT2232H FIFO will not work correctly with")
@@ -566,7 +566,8 @@ def main():
             print("USB: Error checking EEPROM\n")
             return 1
 
-    dev.dev.write(libov.FTDI_INTERFACE_A, b'\x00' * 512, async_=False)
+    # ???
+    dev.send_packet(b'\x00' * 512)
 
     try:
         if hasattr(args, 'hdlr'):

@@ -30,7 +30,10 @@ setup(
     url='https://github.com/usb-tools/pyopenvizsla',
     license='MIT',
     entry_points = {
-        'console_scripts': [ 'ovctl = openvizsla.commands.ovctl:main']
+        'console_scripts': [ 
+            'ovctl = openvizsla.commands.ovctl:main',
+            'ov_sniff = openvizsla.commands.ov_sniff:main',
+        ]
     },
     tests_require=[''],
     install_requires=['crcmod'],

@@ -1,8 +1,30 @@
+"""
+Core USB packet sniffer packet backend for OpenVizsla.
+"""
+
+import crcmod
+
+from .protocol import OVPacketHandler
 
 def hd(x):
     return " ".join("%02x" % i for i in x)
 
-class USBInterpreter(object):
+#  Physical layer error
+HF0_ERR =  0x01
+# RX Path Overflow
+HF0_OVF =  0x02
+# Clipped by Filter
+HF0_CLIP = 0x04
+# Clipped due to packet length (> 800 bytes)
+HF0_TRUNC = 0x08
+# First packet of capture session; IE, when the cap hardware was enabled
+HF0_FIRST = 0x10
+# Last packet of capture session; IE, when the cap hardware was disabled
+HF0_LAST = 0x20
+
+
+class USBInterpreter:
+
     import crcmod
     data_crc = staticmethod(crcmod.mkCrcFun(0x18005))
 
@@ -150,3 +172,78 @@ class USBInterpreter(object):
                     flag_field, ts/RATE, (delta_print)/RATE,
                     frame_print, subf_print, delta_subframe/RATE * 1E6,
                     len(buf), msg))
+
+
+def decode_flags(flags):
+    ret = ""
+    ret += "Error " if flags & HF0_ERR else ""
+    ret += "Overflow" if flags & HF0_OVF else ""
+    ret += "Clipped " if flags & HF0_CLIP else ""
+    ret += "Truncated " if flags & HF0_TRUNC else ""
+    ret += "First " if flags & HF0_FIRST else ""
+    ret += "Last " if flags & HF0_LAST else ""
+    return ret.rstrip()
+
+
+class USBSniffer(OVPacketHandler):
+
+    HANDLED_PACKET_NUMBERS = [0xac, 0xad, 0xa0]
+
+    data_crc = staticmethod(crcmod.mkCrcFun(0x18005))
+
+    def bytes_necessary_to_determine_size(self, packet_number):
+        if packet_number == 0xa0:
+            return 5
+        return 1
+
+    def __init__(self, write_handler):
+
+        self.last_rxcmd = 0
+        self.usbbuf = []
+        self.highspeed = False
+        self.decoder = USBInterpreter(self.highspeed)
+        self.handlers = [self.handle_usb_verbose]
+        self.got_start = False
+
+        # Call the super-constructor.
+        super().__init__(write_handler)
+
+
+    def _packet_size(self, buf):
+
+        if buf[0] != 0xa0:
+            return 2
+        else:
+            #print("SIZING: %s" % " ".join("%02x" %i for i in buf))
+            return (buf[4] << 8 | buf[3]) + 8
+
+
+    def handle_packet(self, buf):
+
+        if buf[0] == 0xa0:
+            flags = buf[1] | buf[2] << 8
+
+            ts = buf[5] | buf[6] << 8 | buf[7] << 16
+
+            if flags != 0 and flags != HF0_FIRST and flags != HF0_LAST:
+                print("PERR: %04X (%s)" % (flags, decode_flags(flags)))
+            
+            if flags & HF0_FIRST:
+                self.got_start = True
+
+            if self.got_start:
+                self.handle_usb(ts, buf[8:], flags)
+
+            if flags & HF0_LAST:
+
+                self.got_start = False
+
+
+    def handle_usb(self, ts, buf, flags):
+        for handler in self.handlers:
+            handler(ts, buf, flags)
+
+
+    def handle_usb_verbose(self, ts, buf, flags):
+            #                ChandlePacket(ts, flags, buf, len(buf))
+            self.decoder.handlePacket(ts, buf, flags)

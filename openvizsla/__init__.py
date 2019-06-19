@@ -22,3 +22,7 @@ def find_openvizsla_asset(filename):
         return asset_path
     else:
         return None
+
+
+class ProtocolError(IOError):
+    pass
