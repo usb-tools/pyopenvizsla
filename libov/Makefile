@@ -1,0 +1,46 @@
+UNAME := $(shell uname)
+
+LIBNAME := libov
+
+ifeq ($(UNAME), Darwin)
+        # Default install location for libusb-1.0 on Mac OS
+	CFLAGS += -I/usr/local/include/libusb-1.0
+	LDFLAGS += -L/usr/local/lib -lusb-1.0
+
+	# Large file support
+	CFLAGS += -DFILE_OFFSET_BITS=64
+
+	SO := $(LIBNAME).dylib
+	SO_LDFLAGS = -dynamiclib -lusb-1.0
+
+else
+        # Load libusb via pkg-config
+	PACKAGES := libusb-1.0
+	CFLAGS += $(shell pkg-config --cflags $(PACKAGES))
+	LDFLAGS += $(shell pkg-config --libs $(PACKAGES))
+
+	# Large file support
+	CFLAGS += $(shell getconf LFS_CFLAGS)
+
+	CFLAGS += -fPIC
+
+	SO := $(LIBNAME).so
+	SO_LDFLAGS := $(LDFLAGS) -shared
+endif
+
+# Local headers
+CFLAGS += -I../include
+
+SO_OBJS := fastftdi.o fpgaconfig.o bit_file.o hw_common.o ftdieep.o usb_interp.o
+
+CFLAGS += -O3 -g --std=c99 -D_XOPEN_SOURCE=500
+
+all: $(SO)
+
+$(SO): $(SO_OBJS)
+	cc -o $@ $^ $(SO_LDFLAGS)
+
+*.o: *.h Makefile
+
+clean:
+	rm -f $(SO) $(SO_OBJS)
