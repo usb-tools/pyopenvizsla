@@ -2,6 +2,7 @@
 Memory mapping functions.
 """
 
+from enum import IntFlag
 
 class OVMemoryWindow:
     """ Class representing a window into an address space on the OpenVizsla board. """
@@ -139,6 +140,26 @@ class OVMemoryWindow:
 
 class USB334xMemoryWindow(OVMemoryWindow):
     """ Memory window for accessing ULPI phy registers on a USB3334x. """
+
+
+    class FuncCTLFlags(IntFlag):
+        """ Flag values for a ULPI phy's FUNC_CTL register. """
+
+        # Control over the PHY's power and reset.
+        PHY_POWERED = 1 << 6
+        PHY_RESET   = 1 << 5
+
+        # Control over the PHY's operating mode.
+        # We usually want non-driving, as we want to act as a sniffer,
+        # and not actively participate in USB.
+        OPERATING_MODE_NORMAL       = (0b00 << 3)
+        OPERATING_MODE_NON_DRIVING  = (0b01 << 3)
+        OPERATING_MODE_UNENCODED    = (0b10 << 3)
+        OPERATING_MODE_MANUAL       = (0b11 << 3)
+
+        # Control over the PHY's internal termination resistors.
+        APPLY_TERMINATION_RESISTORS = 1 << 2
+
 
 
     REGISTER_ADDRESSES = {

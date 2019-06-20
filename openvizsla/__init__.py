@@ -1,6 +1,22 @@
 """
-Core helper functions for OpenVizsla.
+Core helper functions and definitions for OpenVizsla.
 """
+
+import enum
+
+
+class OVCaptureUSBSpeed(enum.IntEnum):
+    """ Enumeration representing USB speeds.  """
+
+    # The possible USB speeds capture by OV, encoded to match the values 
+    # in the ULPI FUNC_CTRL register.
+    HIGH  = 0
+    FULL  = 1
+    LOW   = 2
+
+    def is_high_speed(self):
+        return (self is self.HIGH)
+
 
 
 def openvizsla_assets_directory():
@@ -22,7 +38,3 @@ def find_openvizsla_asset(filename):
         return asset_path
     else:
         return None
-
-
-class ProtocolError(IOError):
-    pass

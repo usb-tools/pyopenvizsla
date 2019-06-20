@@ -2,8 +2,11 @@
 import struct
 import queue
  
-from . import ProtocolError
 from .protocol import OVPacketHandler, OVPacketDispatcher
+
+
+class ProtocolError(IOError):
+    pass
 
 
 class IOConnection(OVPacketHandler):
@@ -101,7 +104,6 @@ class SDRAMHandler(OVPacketHandler, OVPacketDispatcher):
 
     def _packet_size(self, buf):
         return (buf[1] + 1) * 2 + 2
-
 
     def handle_packet(self, packet):
         """ Handle SDRAM packets by passing on packets to their subordinates. """

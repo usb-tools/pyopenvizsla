@@ -4,26 +4,144 @@ Core USB packet sniffer packet backend for OpenVizsla.
 
 import crcmod
 
+from enum import IntFlag
 from .protocol import OVPacketHandler
 
 def hd(x):
     return " ".join("%02x" % i for i in x)
 
-#  Physical layer error
-HF0_ERR =  0x01
-# RX Path Overflow
-HF0_OVF =  0x02
-# Clipped by Filter
-HF0_CLIP = 0x04
-# Clipped due to packet length (> 800 bytes)
-HF0_TRUNC = 0x08
-# First packet of capture session; IE, when the cap hardware was enabled
-HF0_FIRST = 0x10
-# Last packet of capture session; IE, when the cap hardware was disabled
-HF0_LAST = 0x20
+
+class USBEventFlags(IntFlag):
+    """ Enum representing the various flags an OV device can attach to a packet. """
+
+    #  Physical layer error
+    ERROR =  0x01
+
+    # RX Path Overflow
+    OVERFLOW =  0x02
+
+    # Clipped by Filter
+    CLIPPED = 0x04
+
+    # Clipped due to packet length (> 800 bytes)
+    TRUNCATED = 0x08
+
+    # First packet of capture session; IE, when the cap hardware was enabled
+    FIRST = 0x10
+
+    # Last packet of capture session; IE, when the cap hardware was disabled
+    LAST = 0x20
 
 
-class USBInterpreter:
+
+class USBEventSink:
+    """ Base class for USB event "sinks", which listen for USB events. """
+
+    def handle_usb_packet(self, timestamp, buffer, flags):
+        """ Core functionality for a USB event sink -- reports each USB packet as it comes in. 
+        
+        Args:
+            timestamp -- The timestamp for the given packet.
+        """
+        pass
+
+
+
+class USBSniffer(OVPacketHandler):
+    """ USB Sniffer packet sink -- receives sniffed packets from the OpenVizsla. """
+
+    HANDLED_PACKET_NUMBERS = [0xac, 0xad, 0xa0]
+
+    USB_PACKET_REPORT = 0xa0
+
+    data_crc = staticmethod(crcmod.mkCrcFun(0x18005))
+
+    def bytes_necessary_to_determine_size(self, packet_number):
+        if packet_number == 0xa0:
+            return 5
+        return 1
+
+
+    def __init__(self, write_handler, high_speed=False):
+        """ Set up our core USB Sniffer sink, which accepts wrapped USB events and passes them to our event sinks. """
+
+        self.high_speed = high_speed
+        self.got_start = False
+
+        # Start off with an empty array of packet sinks -- sinks should be registered by calling ``.register_sink`.
+        self._sinks = []
+
+        # Call the super-constructor.
+        super().__init__(write_handler)
+
+
+    def _packet_size(self, buf):
+        """ Return the packet size for our core USB events. """
+
+        if buf[0] != self.USB_PACKET_REPORT:
+            return 2
+        else:
+            return (buf[4] << 8 | buf[3]) + 8
+
+
+    def register_sink(self, sink):
+        """ Registers a USBEventSink to receive any USB events. """
+
+        self._sinks.append(sink)
+
+
+    def emit_usb_packet(self, ts, buf, flags):
+        for sink in self._sinks:
+            sink.handle_usb_packet(ts, buf, flags)
+
+
+    @staticmethod
+    def decode_flags(flags):
+        ret = ""
+        ret += "Error " if flags & USBEventFlags.ERROR else ""
+        ret += "Overflow" if flags & USBEventFlags.OVERFLOW else ""
+        ret += "Clipped " if flags & USBEventFlags.CLIPPED else ""
+        ret += "Truncated " if flags & USBEventFlags.TRUNCATED else ""
+        ret += "First " if flags & USBEventFlags.FIRST else ""
+        ret += "Last " if flags & USBEventFlags.LAST else ""
+        return ret.rstrip()
+
+
+    def handle_packet(self, buf):
+        """ Separates the input flags from the core meta-data extracted from the OV USB packet. """
+
+        if buf[0] == self.USB_PACKET_REPORT:
+
+            # Parse the flags and timeout from our buffer.
+            # TODO: replace with a call to struct.unpack
+            flags = buf[1] | buf[2] << 8
+            ts = buf[5] | buf[6] << 8 | buf[7] << 16
+
+            # TODO: validate packet size (buf[3] and buf[4])?
+
+            # TODO: get rid of me?
+            if flags != 0 and flags != USBEventFlags.FIRST and flags != USBEventFlags.LAST:
+                print("PERR: %04X (%s)" % (flags, self.decode_flags(flags)))
+            
+            if flags & USBEventFlags.FIRST:
+                self.got_start = True
+
+            if self.got_start:
+                self.emit_usb_packet(ts, buf[8:], flags)
+
+            if flags & USBEventFlags.LAST:
+                self.got_start = False
+
+        else:
+            print("got interesting packet {}".format(buf[0]))
+
+
+
+
+
+
+class USBSimplePrintSink(USBEventSink):
+    """ Most basic sink for USB events: report them directly to the console. """
 
     import crcmod
     data_crc = staticmethod(crcmod.mkCrcFun(0x18005))
@@ -31,7 +149,7 @@ class USBInterpreter:
     def __init__(self, highspeed):
         self.frameno = None
         self.subframe = 0
-        self.highspeed = True
+        self.highspeed = highspeed
 
         self.last_ts_frame = 0
 
@@ -40,7 +158,8 @@ class USBInterpreter:
         self.ts_base = 0
         self.ts_roll_cyc = 2**24
 
-    def handlePacket(self, ts, buf, flags):
+
+    def handle_usb_packet(self, ts, buf, flags):
         CRC_BAD = 1
         CRC_GOOD = 2
         CRC_NONE = 3
@@ -54,10 +173,8 @@ class USBInterpreter:
 
         ts += self.ts_base
 
-
         suppress = False
 
-        #msg = "(%s)" % " ".join("%02x" % i for i in buf)
         msg = ""
 
         if len(buf) != 0:
@@ -174,76 +291,3 @@ class USBInterpreter:
                     len(buf), msg))
 
 
-def decode_flags(flags):
-    ret = ""
-    ret += "Error " if flags & HF0_ERR else ""
-    ret += "Overflow" if flags & HF0_OVF else ""
-    ret += "Clipped " if flags & HF0_CLIP else ""
-    ret += "Truncated " if flags & HF0_TRUNC else ""
-    ret += "First " if flags & HF0_FIRST else ""
-    ret += "Last " if flags & HF0_LAST else ""
-    return ret.rstrip()
-
-
-class USBSniffer(OVPacketHandler):
-
-    HANDLED_PACKET_NUMBERS = [0xac, 0xad, 0xa0]
-
-    data_crc = staticmethod(crcmod.mkCrcFun(0x18005))
-
-    def bytes_necessary_to_determine_size(self, packet_number):
-        if packet_number == 0xa0:
-            return 5
-        return 1
-
-    def __init__(self, write_handler):
-
-        self.last_rxcmd = 0
-        self.usbbuf = []
-        self.highspeed = False
-        self.decoder = USBInterpreter(self.highspeed)
-        self.handlers = [self.handle_usb_verbose]
-        self.got_start = False
-
-        # Call the super-constructor.
-        super().__init__(write_handler)
-
-
-    def _packet_size(self, buf):
-
-        if buf[0] != 0xa0:
-            return 2
-        else:
-            #print("SIZING: %s" % " ".join("%02x" %i for i in buf))
-            return (buf[4] << 8 | buf[3]) + 8
-
-
-    def handle_packet(self, buf):
-
-        if buf[0] == 0xa0:
-            flags = buf[1] | buf[2] << 8
-
-            ts = buf[5] | buf[6] << 8 | buf[7] << 16
-
-            if flags != 0 and flags != HF0_FIRST and flags != HF0_LAST:
-                print("PERR: %04X (%s)" % (flags, decode_flags(flags)))
-            
-            if flags & HF0_FIRST:
-                self.got_start = True
-
-            if self.got_start:
-                self.handle_usb(ts, buf[8:], flags)
-
-            if flags & HF0_LAST:
-
-                self.got_start = False
-
-
-    def handle_usb(self, ts, buf, flags):
-        for handler in self.handlers:
-            handler(ts, buf, flags)
-
-
-    def handle_usb_verbose(self, ts, buf, flags):
-            #                ChandlePacket(ts, flags, buf, len(buf))
-            self.decoder.handlePacket(ts, buf, flags)

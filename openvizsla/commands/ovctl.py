@@ -3,10 +3,12 @@
 # This needs python3.3 or greater - argparse changes behavior
 # TODO - workaround
 
-from .. import libov, find_openvizsla_asset
+from .. import libov, find_openvizsla_asset, OVCaptureUSBSpeed
 
 from ..device import OVDevice
 from ..firmware import OVFirmwarePackage
+from ..sniffer import USBEventSink, USBSimplePrintSink
+
 
 import argparse
 import time
@@ -111,12 +113,12 @@ def report(dev):
             ident |= x
 
         name = 'unknown'
-        if ident == libov.SMSC_334x_MAGIC:
+        if ident == OVDevice.USB334X_DEVICE_ID:
             name = 'SMSC 334x'
         print("\tULPI PHY ID: %08x (%s)" % (ident, name))
 
         # do in depth phy tests
-        if ident == libov.SMSC_334x_MAGIC:
+        if ident == OVDevice.USB334X_DEVICE_ID:
             dev.ulpi_regs.scratch = 0
             dev.ulpi_regs.scratch_set = 0xCF
             dev.ulpi_regs.scratch_clr = 0x3C
@@ -137,7 +139,7 @@ def report(dev):
         print("\t... all passed")
 
 
-class OutputCustom:
+class OutputCustom(USBEventSink):
     def __init__(self, output, speed):
         self.output = output
         self.speed = speed
@@ -149,7 +151,7 @@ class OutputCustom:
         except:
             self.template = "data=%s speed=%s time=%f\n"
 
-    def handle_usb(self, ts, pkt, flags):
+    def handle_usb_packet(self, ts, pkt, flags):
         if ts < self.last_ts:
             self.ts_offset += 0x1000000
         self.last_ts = ts
@@ -157,14 +159,14 @@ class OutputCustom:
         self.output.write(bytes(self.template % (pkthex, self.speed.upper(), (ts + self.ts_offset) / 60e6), "ascii"))
 
 
-class OutputITI1480A:
+class OutputITI1480A(USBEventSink):
     def __init__(self, output, speed):
         self.output = output
         self.speed = speed
         self.ts_offset = 0
         self.ts_last = None
 
-    def handle_usb(self, ts, pkt, flags):
+    def handle_usb_packet(self, ts, pkt, flags):
         buf = []
 
         # Skip SOF and empty packets
@@ -207,14 +209,14 @@ class OutputITI1480A:
         self.output.write(buf)
 
 
-class OutputPcap:
+class OutputPcap(USBEventSink):
     LINK_TYPE = 255 #FIXME
 
     def __init__(self, output):
         self.output = output
         self.output.write(struct.pack("IHHIIII", 0xa1b2c3d4, 2, 4, 0, 0, 1<<20, self.LINK_TYPE))
 
-    def handle_usb(self, ts, pkt, flags):
+    def handle_usb_packet(self, ts, pkt, flags):
         self.output.write(struct.pack("IIIIH", 0, 0, len(pkt) + 2, len(pkt) + 2, flags))
         self.output.write(pkt)
 
@@ -249,55 +251,49 @@ def sdramtest(dev):
 
     dev.regs.LEDS_MUX_0 = 0
 
-@command('sniff', ('speed', str), ('format', str, 'verbose'), ('out', str, None), ('timeout', int, None))
-def sniff(dev, speed, format, out, timeout):
-    # LEDs off
-    dev.regs.LEDS_MUX_2 = 0
-    dev.regs.LEDS_OUT = 0
 
-    # LEDS 0/1 to FTDI TX/RX
-    dev.regs.LEDS_MUX_0 = 2
-    dev.regs.LEDS_MUX_1 = 2
+def sniffer_print_statistics(dev, elapsed_time):
+    """ Print statistics for the sniff operation during its run. """
 
-    # enable SDRAM buffering
-    ring_base = 0
-    ring_size = 16 * 1024 * 1024
-    ring_end = ring_base + ring_size
-    dev.regs.SDRAM_SINK_GO = 0
-    dev.regs.SDRAM_HOST_READ_GO = 0
-    dev.regs.SDRAM_SINK_RING_BASE = ring_base
-    dev.regs.SDRAM_SINK_RING_END = ring_end
-    dev.regs.SDRAM_HOST_READ_RING_BASE = ring_base
-    dev.regs.SDRAM_HOST_READ_RING_END = ring_end
-    dev.regs.SDRAM_SINK_GO = 1
-    dev.regs.SDRAM_HOST_READ_GO = 1
-
-    # clear perfcounters
-    dev.regs.OVF_INSERT_CTL = 1
-    dev.regs.OVF_INSERT_CTL = 0
-
-    assert speed in ["hs", "fs", "ls"]
-
-    if check_ulpi_clk(dev):
+    if (int(elapsed_time * 10) % 10) != 0:
         return
 
-    # set to non-drive; set FS or HS as requested
-    if speed == "hs":
-            dev.ulpi_regs.func_ctl = 0x48
-            dev.sniffer.highspeed = True
-    elif speed == "fs":
-            dev.ulpi_regs.func_ctl = 0x49
-            dev.sniffer.highspeed = False
-    elif speed == "ls":
-            dev.ulpi_regs.func_ctl = 0x4a
-            dev.sniffer.highspeed = False
-    else:
-        assert 0,"Invalid Speed"
+    ring_base = 0
+    ring_size = dev.RAM_SIZE_BYTES
 
-    assert format in ["verbose", "custom", "pcap", "iti1480a"]
+    dev.regs.SDRAM_SINK_PTR_READ = 0
+    dev.regs.OVF_INSERT_CTL = 0
 
-    output_handler = None
-    out = out and open(out, "wb")
+    rptr = dev.regs.SDRAM_SINK_RPTR
+    wptr = dev.regs.SDRAM_SINK_WPTR
+    wrap_count = dev.regs.SDRAM_SINK_WRAP_COUNT
+
+    rptr -= ring_base
+    wptr -= ring_base
+
+    assert 0 <= rptr <= ring_size
+    assert 0 <= wptr <= ring_size
+
+    delta = wptr - rptr
+    if delta < 0:
+        delta += ring_size
+
+    total = wrap_count * ring_size + wptr
+    utilization = delta * 100 / ring_size
+
+    print("%d / %d (%3.2f %% utilization) %d kB | %d overflow, %08x total | R%08x W%08x" %
+        (delta, ring_size, utilization, total / 1024,
+        dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL,
+        rptr, wptr
+        ), file = sys.stderr)
+
+    dev.regs.OVF_INSERT_CTL = 0
+    print("%d overflow, %08x total" % (dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL), file = sys.stderr)
+
+
+
+def output_handler_for_format(format, speed, out):
+    """ Return an output handler for the user-provided format. """
 
     if format == "custom":
         output_handler = OutputCustom(out or sys.stdout, speed)
@@ -306,77 +302,57 @@ def sniff(dev, speed, format, out, timeout):
         output_handler = OutputPcap(out)
     elif format == "iti1480a":
         output_handler = OutputITI1480A(out, speed)
+    elif (not format) or (format == "verbose"):
+        output_handler = USBSimplePrintSink(speed.is_high_speed())
+    else:
+        raise ValueError("invalid output format '{}'".format(format))
 
-    if output_handler is not None:
-      dev.rxcsniff.service.handlers = [output_handler.handle_usb]
+    return output_handler
 
-    elapsed_time = 0
+
+
+@command('sniff', ('speed', str), ('format', str, 'verbose'), ('out', str, None), ('timeout', int, None))
+def sniff(dev, speed, format, out, timeout):
+
+    def should_halt(elapsed_time):
+        """ Simple callback function that determines if our capture should end. """
+
+        # Halt if we've exceeded the user timeout.
+        return (elapsed_time > timeout) if timeout else False
+
+
+    # Convert the speed into an OV constant.
     try:
-        dev.regs.CSTREAM_CFG = 1
-        while 1:
-            dev.regs.SDRAM_SINK_PTR_READ = 0
-            dev.regs.OVF_INSERT_CTL = 0
+        speed_lookup = {
+            'hs': OVCaptureUSBSpeed.HIGH,
+            'fs': OVCaptureUSBSpeed.FULL,
+            'ls': OVCaptureUSBSpeed.LOW
+        }
+        speed = speed_lookup[speed]
+    except KeyError:
+        raise ValueError("invalid speed; must be ls, fs, or hs")
 
-            rptr = dev.regs.SDRAM_SINK_RPTR
-            wptr = dev.regs.SDRAM_SINK_WPTR
-            wrap_count = dev.regs.SDRAM_SINK_WRAP_COUNT
 
-            rptr -= ring_base
-            wptr -= ring_base
+    if out:
+        out = open(out, "wb")
 
-            assert 0 <= rptr <= ring_size
-            assert 0 <= wptr <= ring_size
+    # Create an output handler packet sink for the user-provided format.
+    try:
+        output_handler = output_handler_for_format(format, speed, out)
 
-            delta = wptr - rptr
-            if delta < 0:
-                delta += ring_size
+        # Attach our output handler to the device, and run it.:
+        dev.register_sink(output_handler)
+        dev.run_capture(speed, halt_callback=should_halt, statistics_callback=sniffer_print_statistics)
 
-            total = wrap_count * ring_size + wptr
-            utilization = delta * 100 / ring_size
-
-            print("%d / %d (%3.2f %% utilization) %d kB | %d overflow, %08x total | R%08x W%08x" %
-                (delta, ring_size, utilization, total / 1024,
-                dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL,
-                rptr, wptr
-                ), file = sys.stderr)
-
-            dev.regs.OVF_INSERT_CTL = 0
-            print("%d overflow, %08x total" % (dev.regs.OVF_INSERT_NUM_OVF, dev.regs.OVF_INSERT_NUM_TOTAL), file = sys.stderr)
-
-            if False:
-                dev.regs.SDRAM_SINK_DEBUG_CTL = 0
-                print("rptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x | wptr = %08x i_stb=%08x i_ack=%08x d_stb=%08x d_term=%08x s0=%08x s1=%08x s2=%08x wrap=%x" % (
-                    dev.regs.SDRAM_HOST_READ_RPTR_STATUS,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_I_STB,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_I_ACK,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_D_STB,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_D_TERM,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S0,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S1,
-                    dev.regs.SDRAM_HOST_READ_DEBUG_S2,
-                    dev.regs.SDRAM_SINK_WPTR,
-                    dev.regs.SDRAM_SINK_DEBUG_I_STB,
-                    dev.regs.SDRAM_SINK_DEBUG_I_ACK,
-                    dev.regs.SDRAM_SINK_DEBUG_D_STB,
-                    dev.regs.SDRAM_SINK_DEBUG_D_TERM,
-                    dev.regs.SDRAM_SINK_DEBUG_S0,
-                    dev.regs.SDRAM_SINK_DEBUG_S1,
-                    dev.regs.SDRAM_SINK_DEBUG_S2,
-                    dev.regs.SDRAM_SINK_WRAP_COUNT,
-                    ), file = sys.stderr)
-            if timeout and elapsed_time > timeout:
-                break
-            time.sleep(1)
-            elapsed_time = elapsed_time + 1
     except KeyboardInterrupt:
-        pass
-    finally:
-        dev.regs.SDRAM_SINK_GO = 0
-        dev.regs.SDRAM_HOST_READ_GO = 0
-        dev.regs.CSTREAM_CFG = 0
+        dev.ensure_capture_stopped()
+    finally: 
+        
+        # Finally, clean up.
+        if out is not None:
+            out.close()
 
-    if out is not None:
-        out.close()
+
 
 @command('debug-stream')
 def debug_stream(dev):
@@ -394,13 +370,14 @@ def debug_stream(dev):
     print("cons: %04x prod-wr: %04x prod-hd: %04x size: %04x state: %02x" % (cons, prod, prod_hd, size, state))
     print("\tlaststart: %04x lastcount: %04x (end: %04x) pw-at-write: %04x" % (laststart, lastcount, laststart + lastcount, lastpw))
 
+
 @command('ioread', ('addr', str))
 def ioread(dev, addr):
-    print("%s: %02x" % (addr, dev.ioread(addr)))
+    print("%s: %02x" % (addr, dev.read_io_byte(addr)))
 
 @command('iowrite', ('addr', str), ('value', int16))
 def iowrite(dev, addr, value):
-    dev.iowrite(addr, value)
+    dev.write_io_byte(addr, value)
 
 @command('led-test', ('v', int16))
 def ledtest(dev, v):
