@@ -13,6 +13,7 @@ from .ftdi import FTDIDevice
 from .memory import OVMemoryWindow, USB334xMemoryWindow
 
 from .sniffer import USBSniffer
+from .firmware import OVFirmwarePackage
 from .protocol import OVPacketDispatcher, LFSRTest, DummyHandler
 from .io import IOConnection, SDRAMHandler
 
@@ -46,7 +47,8 @@ class OVDevice(OVPacketDispatcher):
 
         # If we weren't handed a firmware package, look for the default.
         if firmware_package is None:
-            firmware_package = find_openvizsla_asset(self.DEFAULT_FIRMWARE_PACKAGE_NAME)
+            package_file = find_openvizsla_asset(self.DEFAULT_FIRMWARE_PACKAGE_NAME)
+            firmware_package = OVFirmwarePackage(package_file)
        
         self.verbose      = verbose
         self.firmware     = firmware_package
