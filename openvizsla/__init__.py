@@ -42,3 +42,6 @@ def find_openvizsla_asset(filename):
 
 # Allow OpenVizsla devices to be refernced as if they were in this module directly.
 from .device import OVDevice
+
+# And allow the definition of a USBEventSink to be referenced as though it were in this namespace.
+from .sniffer import USBEventSink
