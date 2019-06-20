@@ -38,3 +38,7 @@ def find_openvizsla_asset(filename):
         return asset_path
     else:
         return None
+
+
+# Allow OpenVizsla devices to be refernced as if they were in this module directly.
+from .device import OVDevice
