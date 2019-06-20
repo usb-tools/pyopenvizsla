@@ -7,7 +7,7 @@ import threading
 
 from enum import Enum
 
-from . import OVCaptureUSBSpeed
+from . import OVCaptureUSBSpeed, find_openvizsla_asset
 
 from .ftdi import FTDIDevice
 from .memory import OVMemoryWindow, USB334xMemoryWindow
@@ -34,12 +34,19 @@ class OVDevice(OVPacketDispatcher):
     # Magic number for the USB334X.
     USB334X_DEVICE_ID = 0x4240009
 
+    # Default firmware package name.
+    DEFAULT_FIRMWARE_PACKAGE_NAME = 'ov3.fwpkg'
+
 
     def __init__(self, firmware_package=None, verbose=False):
         """ Set up -- but do not open -- a connection to an OpenVizsla device. """
 
         # Set up the OV device to handle packets.
         super().__init__(verbose=verbose)
+
+        # If we weren't handed a firmware package, look for the default.
+        if firmware_package is None:
+            firmware_package = find_openvizsla_asset(self.DEFAULT_FIRMWARE_PACKAGE_NAME)
        
         self.verbose      = verbose
         self.firmware     = firmware_package
