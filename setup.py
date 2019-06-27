@@ -1,5 +1,9 @@
-from setuptools import setup, find_packages, Extension
+try:
+    import pkgconfig
+except:
+    pass
 
+from setuptools import setup, find_packages, Extension
 
 # The sources necessary to build libov.
 # TODO: add gettimeofday.c if we're on Windows.
@@ -16,10 +20,7 @@ libov_sources = [
 # Describe how to build libov, the native-code component of the openvizsla library.
 libov = Extension('openvizsla.libov_native', 
     sources=libov_sources,
-
-    # FIXME: use pkg-config to figure these out?
-    include_dirs = ['/usr/include/libusb-1.0'],
-    libraries=['usb-1.0']
+    **pkgconfig.parse('libusb-1.0')
 )
 
 
@@ -36,6 +37,7 @@ setup(
         ]
     },
     tests_require=[''],
+    setup_requires=['pkgconfig'],
     install_requires=['crcmod'],
     description='Python library for interfacing with OpenVizsla logic analyzers',
     long_description='Python library for interfacing with OpenVizsla logic analyzers; intended to all modular use of libOV in other programs',
