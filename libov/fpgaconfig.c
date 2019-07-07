@@ -225,8 +225,6 @@ ConfigBegin(FTDIDevice *dev)
   // Short delay while the FPGA initializes
   usleep(10000);
 
-  fprintf(stderr, "FPGA: sending configuration bitstream\n");
-
   // Make sure DONE is low now, for sanity.
   err = FTDIDevice_MPSSE_GetHighByte(dev, FTDI_INTERFACE_B, &byte);
   if (err)
@@ -270,14 +268,12 @@ ConfigEnd(FTDIDevice *dev)
     return err;
 
   if (byte & PORTB_INIT_BIT) {
-    fprintf(stderr, "FPGA: CRC OK\n");
   } else {
     fprintf(stderr, "FPGA: CRC failed\n");
     // return -1     (not sure if this will work without a pull-up resistor)
   }
 
   if (byte & PORTB_DONE_BIT) {
-    fprintf(stderr, "FPGA: configured\n");
     return 0;
   } else {
     fprintf(stderr, "FPGA: Configuration error!\n");
@@ -363,7 +359,6 @@ FPGAConfig_LoadFile(FTDIDevice *dev, const char *filename)
     goto done;
   }
 
-  fprintf(stderr, "FPGA: Bitstream timestamp %s %s\n", bf->date, bf->time);
 
   err = ConfigBegin(dev);
   if (err)

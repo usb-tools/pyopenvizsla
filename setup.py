@@ -1,3 +1,4 @@
+
 try:
     import pkgconfig
 except:
@@ -26,7 +27,7 @@ libov = Extension('openvizsla.libov_native',
 
 setup(
     name='pyopenvizsla',
-    version='0.0.1',
+    version='0.1.0',
     python_requires='>3.3',
     url='https://github.com/usb-tools/pyopenvizsla',
     license='MIT',
